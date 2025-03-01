@@ -34,12 +34,13 @@ var LOG: org.slf4j.Logger = LoggerFactory.getLogger("Utility")
  * @throws KModelMapperException when matching fields are not of same data type
  * @see KModelMapperException.getCause
 </OUTPUT> */
-fun  camapEntry(obj: Any, outputClass: KClass<Any>) :Any {
+@Suppress("UNCHECKED_CAST")
+fun <I : Any, N : Any>  mapEntry(obj: I, outputClass: KClass<N>) :N {
 
     try {
-        val output : Any = outputClass::class.createInstance()
+        val output : Any = outputClass.createInstance()
         map(obj, output)
-        return output
+        return output as N
     } catch (throwable: Throwable) {
         throw KModelMapperException(GEN_ERROR_MESSAGE, throwable.cause)
     }
@@ -50,7 +51,7 @@ fun  camapEntry(obj: Any, outputClass: KClass<Any>) :Any {
  * @param obj
  * @param output
  */
-fun  map(obj: Any, output: Any) {
+fun  map(obj: Any?, output: Any) {
     try {
         // break chain when object is null
         if (obj == null) {
@@ -70,6 +71,7 @@ fun  map(obj: Any, output: Any) {
 
         // iterate through fields in the bean class
         for (field in fields) {
+            field.isAccessible = true
             val obj = field[obj]
 
             // check if field is a collection type
@@ -79,7 +81,7 @@ fun  map(obj: Any, output: Any) {
                     if (o == null) {
                         continue
                     }
-                    if (obj.javaClass.packageName.startsWith("java")) {
+                    if (o.javaClass.packageName.startsWith("java")) {
                         continue
                     }
 
@@ -94,11 +96,23 @@ fun  map(obj: Any, output: Any) {
                     if (outputField != null && outputField.type == MutableList::class.java) {
                         val collectionType = outputField.genericType as ParameterizedType
 
+                        outputField.isAccessible = true
                         oput_ = Class.forName(collectionType.actualTypeArguments[0].typeName).getDeclaredConstructor()
                             .newInstance()
-                        val clctn = outputField[output] as MutableCollection<Any>
-
-                        clctn.add(oput_)
+                        outputField.get(output)
+                        val clctn = outputField[output] as MutableCollection<Any>?
+                        if (clctn != null) {
+                            // set newly created object in list which is further updated by reference
+                            /**
+                             * @see .map
+                             */
+                            clctn.add(oput_)
+                        } else {  // initialize an empty collection when mapping null field
+                            outputField.isAccessible = true
+                            val objectList: MutableCollection<Any> = collectionFactory.get(outputField.type)!!.get()
+                            objectList.add(oput_)
+                            outputField[output] = objectList
+                        }
                     }
 
                     if (oput_ == null) continue
@@ -118,6 +132,7 @@ fun  map(obj: Any, output: Any) {
                                         val classFieldMapping: ClassFieldMapping = annotation
                                         val sourceFieldMapping: Array<SourceFieldMapping> = classFieldMapping.fields
                                         for (sfm in sourceFieldMapping) {
+                                            destinationField.isAccessible = true
                                             if (sfm.sourceField == field.name) {
                                                 destinationField[output] = obj
                                             }
@@ -152,12 +167,12 @@ fun  map(obj: Any, output: Any) {
         }
     } catch (exception: Exception) {
         LOG.error("error occurred mapping entity", exception)
-        throw KModelMapperException(GEN_ERROR_MESSAGE, exception)
+        throw KModelMapperException( exception)
     }
 }
 
 fun <T> isNotEmpty(vararg t: T): Boolean {
-    return t.size > 0
+    return t.isNotEmpty()
 }
 
 private fun updateField(outputField: Field, obj: Any?): Any? {
@@ -207,21 +222,21 @@ private fun  getField(obj: Any, fieldName: String): Field? {
 }
 
 
+val collectionFactory = ImmutableCollectionFactory.collectionFactory<Any>()
+
+
 /**
  * Defines a class collection instance in the factory method
  */
-object ImmutableCollectionFactory {
+ object ImmutableCollectionFactory {
     /**
      * @param <T>
      * @return lazy initialization of new immutable collection to be created
     </T> */
-    fun <T> collectionFactory(): Map<Class<*>, Supplier<MutableCollection<T?>>> {
+    fun <T> collectionFactory(): Map<Class<*>, Supplier<MutableCollection<T>>> {
         return java.util.Map.of(
-            MutableList::class.java,
-            Supplier { ArrayList() },
-            MutableSet::class.java,
-            Supplier { HashSet() },
-            LinkedList::class.java,
-            Supplier { LinkedList() })
+            MutableList::class.java, Supplier { ArrayList() },
+            MutableSet::class.java, Supplier { HashSet() },
+            LinkedList::class.java, Supplier { LinkedList() })
     }
 }
